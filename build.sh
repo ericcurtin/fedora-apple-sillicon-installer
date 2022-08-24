@@ -1,8 +1,8 @@
 #!/bin/sh
 
-set -e
+set -ex
 
-BASE_IMAGE_URL="https://jp.mirror.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz"
+BASE_IMAGE_URL="https://download.fedoraproject.org/pub/fedora/linux/releases/36/Container/aarch64/images/Fedora-Container-Base-36-1.5.aarch64.tar.xz"
 BASE_IMAGE="$(basename "$BASE_IMAGE_URL")"
 
 DL="$PWD/dl"
@@ -43,27 +43,14 @@ rm -rf "$ROOT"
 mkdir -p "$ROOT"
 
 echo "## Unpacking base image..."
+cd "$ROOT"
 bsdtar -xpf "$DL/$BASE_IMAGE" -C "$ROOT"
+tar -xOf "$DL/$BASE_IMAGE" --wildcards --no-anchored 'layer.tar' | bsdtar -xpf -
+cd -
 
 cp -r "$FILES" "$ROOT"
 
 mount --bind "$ROOT" "$ROOT"
-
-cp "$ROOT"/etc/pacman.d/mirrorlist{,.orig}
-
-echo "## Installing keyring package..."
-pacstrap -G "$ROOT" asahilinux-keyring
-
-run_scripts() {
-    group="$1"
-    echo "## Running script group: $group"
-    for i in "scripts/$group/"*; do
-        echo "### Running $i"
-        arch-chroot "$ROOT" /bin/bash <"$i"
-	# Work around some devtmpfs shenanigans... something keeps that mount in use?
-	clean_mounts
-    done
-}
 
 make_uefi_image() {
     imgname="$1"
@@ -72,7 +59,6 @@ make_uefi_image() {
     echo "## Making image $imgname"
     echo "### Creating EFI system partition tree..."
     mkdir -p "$img/esp"
-    cp -r "$ROOT"/boot/efi/m1n1 "$img/esp/"
     echo "### Compressing..."
     rm -f "$img".zip
     ( cd "$img"; zip -r ../"$imgname".zip * )
@@ -84,8 +70,6 @@ make_image() {
     img="$IMAGES/$imgname"
     mkdir -p "$img"
     echo "## Making image $imgname"
-    echo "### Cleaning up..."
-    rm -f "$ROOT/var/cache/pacman/pkg"/*
     echo "### Calculating image size..."
     size="$(du -B M -s "$ROOT" | cut -dM -f1)"
     echo "### Image size: $size MiB"
@@ -101,30 +85,19 @@ make_image() {
     rsync -aHAX \
         --exclude /files \
         --exclude '/tmp/*' \
-        --exclude '/etc/pacman.d/gnupg/*' \
         --exclude /etc/machine-id \
         --exclude '/boot/efi/*' \
         "$ROOT/" "$IMG/"
-    sed -i s/asahi-dev/asahi/g "$IMG"/etc/pacman.conf
-    mv -f "$IMG"/etc/pacman.d/mirrorlist{.orig,}
-    echo "### Running grub-mkconfig..."
-    arch-chroot "$IMG" grub-mkconfig -o /boot/grub/grub.cfg
     echo "### Unmounting..."
     umount "$IMG"
     echo "### Creating EFI system partition tree..."
     mkdir -p "$img/esp/EFI/BOOT"
-    cp "$ROOT"/boot/grub/arm64-efi/core.efi "$img/esp/EFI/BOOT/BOOTAA64.EFI"
-    cp -r "$ROOT"/boot/efi/m1n1 "$img/esp/"
     echo "### Compressing..."
     rm -f "$img".zip
     ( cd "$img"; zip -1 -r ../"$imgname".zip * )
     echo "### Done"
 }
 
-run_scripts base
-make_image "asahi-base"
-
-run_scripts plasma
-make_image "asahi-plasma"
-
+make_image
 make_uefi_image "uefi-only"
+
